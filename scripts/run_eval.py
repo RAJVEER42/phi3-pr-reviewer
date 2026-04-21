@@ -1,0 +1,245 @@
+#!/usr/bin/env python3
+"""Phase 3 / Phase 5 — evaluate Phi-3-mini (base or base+LoRA) on the test set.
+
+Same script used for both:
+    Phase 3: baseline (no adapter) — establishes the bar the fine-tune must beat.
+    Phase 5: fine-tuned (--adapter path_or_hub_id) — measured on the identical
+             test set so the delta is honest.
+
+Pipeline:
+    1. Load Phi-3-mini in 4-bit. Optionally attach a LoRA adapter.
+    2. Load test split from HF Hub.
+    3. Greedy-decode a review comment per row (deterministic → reproducible delta).
+    4. Compute BERTScore F1 (deberta-xlarge-mnli scorer) per TASK_SPEC §6.1.
+    5. Log mean metrics to W&B. Save per-row predictions as JSONL.
+
+Designed to run on a single Kaggle P100 (free tier). Secrets come from env
+vars locally or Kaggle Secrets on the notebook. See KAGGLE_SETUP.md.
+
+Usage:
+    # Baseline (Phase 3):
+    python scripts/run_eval.py --dataset your-username/pr-reviews --tag baseline
+
+    # Fine-tuned (Phase 5):
+    python scripts/run_eval.py \\
+        --dataset your-username/pr-reviews \\
+        --adapter your-username/phi3-pr-reviewer-lora \\
+        --tag finetuned
+
+    # Held-out repo (Phase 5, generalization check):
+    python scripts/run_eval.py \\
+        --dataset your-username/pr-reviews-holdout \\
+        --adapter your-username/phi3-pr-reviewer-lora \\
+        --tag finetuned_holdout
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+from pathlib import Path
+
+BASE_MODEL = "microsoft/Phi-3-mini-4k-instruct"
+SCORER_MODEL = "microsoft/deberta-xlarge-mnli"
+MAX_NEW_TOKENS = 256  # TASK_SPEC §3 hard cap
+
+
+def get_secret(name: str) -> str | None:
+    """Read a secret from env or Kaggle Secrets, in that order."""
+    val = os.environ.get(name)
+    if val:
+        return val
+    try:
+        from kaggle_secrets import UserSecretsClient  # type: ignore
+        return UserSecretsClient().get_secret(name)
+    except Exception:
+        return None
+
+
+def load_base_model():
+    import torch
+    from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+
+    bnb = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_compute_dtype=torch.bfloat16,
+        bnb_4bit_use_double_quant=True,
+    )
+    tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL)
+    model = AutoModelForCausalLM.from_pretrained(
+        BASE_MODEL,
+        quantization_config=bnb,
+        device_map="auto",
+        torch_dtype=torch.bfloat16,
+    )
+    if tokenizer.pad_token_id is None:
+        tokenizer.pad_token_id = tokenizer.eos_token_id
+    return model, tokenizer
+
+
+def attach_adapter(model, adapter_ref: str):
+    from peft import PeftModel
+
+    model = PeftModel.from_pretrained(model, adapter_ref)
+    model.eval()
+    return model
+
+
+def generate(model, tokenizer, user_content: str) -> str:
+    import torch
+
+    messages = [{"role": "user", "content": user_content}]
+    prompt = tokenizer.apply_chat_template(
+        messages, tokenize=False, add_generation_prompt=True
+    )
+    inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
+    with torch.inference_mode():
+        out = model.generate(
+            **inputs,
+            max_new_tokens=MAX_NEW_TOKENS,
+            do_sample=False,  # greedy → reproducible
+            pad_token_id=tokenizer.pad_token_id,
+        )
+    gen_ids = out[0][inputs.input_ids.shape[1] :]
+    return tokenizer.decode(gen_ids, skip_special_tokens=True).strip()
+
+
+def run(args) -> int:
+    import wandb
+    from datasets import load_dataset
+    from tqdm import tqdm
+
+    hf_token = get_secret("HF_TOKEN")
+    wb_key = get_secret("WANDB_API_KEY")
+    if wb_key:
+        os.environ["WANDB_API_KEY"] = wb_key
+
+    wandb.init(
+        project=args.wandb_project,
+        name=args.tag,
+        config={
+            "base_model": BASE_MODEL,
+            "adapter": args.adapter or None,
+            "dataset": args.dataset,
+            "split": args.split,
+            "scorer": SCORER_MODEL,
+        },
+    )
+
+    print(f"Loading base model {BASE_MODEL} (4-bit)...")
+    model, tokenizer = load_base_model()
+
+    if args.adapter:
+        print(f"Attaching adapter {args.adapter}...")
+        model = attach_adapter(model, args.adapter)
+    model.eval()
+
+    print(f"Loading dataset {args.dataset} / {args.split}...")
+    ds = load_dataset(args.dataset, split=args.split, token=hf_token)
+    print(f"  {len(ds)} rows")
+
+    predictions: list[str] = []
+    references: list[str] = []
+    metadata: list[dict] = []
+
+    for row in tqdm(ds, desc="generating"):
+        user_msg = next(m for m in row["messages"] if m["role"] == "user")
+        ref = next(m for m in row["messages"] if m["role"] == "assistant")
+        pred = generate(model, tokenizer, user_msg["content"])
+        predictions.append(pred)
+        references.append(ref["content"])
+        metadata.append(
+            {
+                "repo": row.get("repo"),
+                "pr_number": row.get("pr_number"),
+                "file_path": row.get("file_path"),
+            }
+        )
+
+    print("\nComputing BERTScore (this loads ~1.5 GB scorer on first run)...")
+    from bert_score import score as bert_score
+
+    P, R, F = bert_score(
+        predictions,
+        references,
+        model_type=SCORER_MODEL,
+        lang="en",
+        batch_size=8,
+        verbose=False,
+    )
+    mean_f = F.mean().item()
+    mean_p = P.mean().item()
+    mean_r = R.mean().item()
+
+    wandb.log(
+        {
+            "bertscore_f1": mean_f,
+            "bertscore_precision": mean_p,
+            "bertscore_recall": mean_r,
+            "n_examples": len(predictions),
+        }
+    )
+
+    out_dir = Path(args.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    preds_path = out_dir / f"{args.tag}_predictions.jsonl"
+    summary_path = out_dir / f"{args.tag}_summary.json"
+
+    with preds_path.open("w") as f:
+        for i, (p, r, m) in enumerate(zip(predictions, references, metadata)):
+            f.write(
+                json.dumps(
+                    {
+                        "idx": i,
+                        "prediction": p,
+                        "reference": r,
+                        "bertscore_f1": F[i].item(),
+                        "bertscore_precision": P[i].item(),
+                        "bertscore_recall": R[i].item(),
+                        **m,
+                    }
+                )
+                + "\n"
+            )
+
+    with summary_path.open("w") as f:
+        json.dump(
+            {
+                "tag": args.tag,
+                "base_model": BASE_MODEL,
+                "adapter": args.adapter,
+                "dataset": args.dataset,
+                "split": args.split,
+                "n_examples": len(predictions),
+                "bertscore_f1": mean_f,
+                "bertscore_precision": mean_p,
+                "bertscore_recall": mean_r,
+            },
+            f,
+            indent=2,
+        )
+
+    print(f"\n  BERTScore F1: {mean_f:.4f}")
+    print(f"  Predictions: {preds_path}")
+    print(f"  Summary:     {summary_path}")
+    wandb.finish()
+    return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--dataset", required=True, help="HF dataset repo id")
+    parser.add_argument("--split", default="test")
+    parser.add_argument("--adapter", default=None, help="LoRA adapter path or hub id (optional)")
+    parser.add_argument("--tag", required=True, help="run name, used for output filenames")
+    parser.add_argument("--wandb-project", default="phi3-pr-reviewer")
+    parser.add_argument("--out-dir", default="/kaggle/working")
+    args = parser.parse_args()
+    return run(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
