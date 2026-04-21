@@ -70,7 +70,7 @@ Only pairs meeting **all** of these enter training, validation, or test:
 4. **Comment length:** 20 ≤ chars ≤ 500.
 5. **Comment author:** Human (not a bot). Bot blocklist: `dependabot[bot]`, `pre-commit-ci[bot]`, `codecov[bot]`, `codecov-io[bot]`, `github-actions[bot]`, `renovate[bot]`, `mergify[bot]`, `sonarcloud[bot]`, `allcontributors[bot]`. Extend as new bots appear.
 6. **PR status:** Closed AND merged. Rejected PRs' reviews are noisy (style disagreements, closed-as-wontfix).
-7. **Comment type:** Inline review comment tied to a specific file + line. General PR conversation comments are excluded.
+7. **Comment type:** Inline review comment tied to a specific file + line. General PR conversation comments are excluded. **Additionally: the comment author must not equal the PR author** (drops self-replies masquerading as inline reviews). Tracked as sub-rule F7b.
 8. **No external references:** Drop comments containing `#\d+` issue links, "as discussed", "per the RFC", "see the doc", or "offline".
 9. **No duplicates:** Same (normalized-comment, same-reviewer) across PRs → keep one.
 10. **Repo diversity:** No single repo may contribute more than 15% of final pairs (avoids domain collapse).
