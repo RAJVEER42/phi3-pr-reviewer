@@ -62,10 +62,12 @@ def load_base_model():
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
+    # T4 has no native bf16 → fall back to fp16 or it silently runs emulated bf16 ~5x slower.
+    compute_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
     bnb = BitsAndBytesConfig(
         load_in_4bit=True,
         bnb_4bit_quant_type="nf4",
-        bnb_4bit_compute_dtype=torch.bfloat16,
+        bnb_4bit_compute_dtype=compute_dtype,
         bnb_4bit_use_double_quant=True,
     )
     tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL)
@@ -73,7 +75,7 @@ def load_base_model():
         BASE_MODEL,
         quantization_config=bnb,
         device_map="auto",
-        torch_dtype=torch.bfloat16,
+        torch_dtype=compute_dtype,
     )
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token_id = tokenizer.eos_token_id
