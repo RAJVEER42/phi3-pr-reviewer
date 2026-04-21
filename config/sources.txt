@@ -1,0 +1,42 @@
+# Source repos for Phase 2 scraper. One slug per line.
+# Rationale: see ../SOURCES.md
+# Held-out (do NOT add here): psf/black, python-poetry/poetry
+
+django/django
+pallets/flask
+tiangolo/fastapi
+encode/httpx
+aio-libs/aiohttp
+
+pandas-dev/pandas
+scikit-learn/scikit-learn
+numpy/numpy
+scipy/scipy
+matplotlib/matplotlib
+
+huggingface/transformers
+huggingface/datasets
+Lightning-AI/pytorch-lightning
+apache/airflow
+
+pypa/pip
+pallets/click
+pre-commit/pre-commit
+pyinstaller/pyinstaller
+
+pytest-dev/pytest
+tox-dev/tox
+HypothesisWorks/hypothesis
+
+python-trio/trio
+encode/starlette
+encode/uvicorn
+
+python/mypy
+PyCQA/pylint
+
+sqlalchemy/sqlalchemy
+redis/redis-py
+
+sphinx-doc/sphinx
+python-attrs/attrs
