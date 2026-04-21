@@ -213,6 +213,11 @@ def main() -> int:
     parser.add_argument("--sample-file", default=DEFAULT_SAMPLE)
     parser.add_argument("--sample-size", type=int, default=20)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--no-repo-cap",
+        action="store_true",
+        help="disable F10 per-repo cap (use for single-repo held-out sets)",
+    )
     args = parser.parse_args()
 
     raw_dir = Path(args.raw_dir)
@@ -258,7 +263,15 @@ def main() -> int:
         candidates = apply_filter(name, candidates, pred, counts)
 
     candidates = dedupe(candidates, counts)
-    candidates = apply_repo_cap(candidates, counts, rng)
+    if args.no_repo_cap:
+        counts["F10_per_repo_cap"] = {
+            "before": len(candidates),
+            "after": len(candidates),
+            "dropped": 0,
+            "cap_per_repo": "disabled",
+        }
+    else:
+        candidates = apply_repo_cap(candidates, counts, rng)
 
     rng.shuffle(candidates)
 
