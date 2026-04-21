@@ -18,7 +18,7 @@ Everything in Phases 3–5 runs on a single Kaggle P100 notebook. Free tier: 30 
 
 Always:
 1. **New notebook** → Click "Create" → "New Notebook".
-2. **Attach GPU** in the right-hand sidebar → *Accelerator* → **GPU P100** (not T4 — T4 is slower for bfloat16 ops).
+2. **Attach GPU** in the right-hand sidebar → *Accelerator* → **GPU T4 x2** (or single T4). *Do NOT pick P100* — P100's compute capability 6.0 is not supported by modern bitsandbytes builds and will fail with `named symbol not found` on 4-bit quantization. T4 (compute 7.5) works cleanly with both bitsandbytes and Unsloth.
 3. **Attach the secrets**: right sidebar → *Add-ons* → *Secrets* → toggle on `HF_TOKEN` and `WANDB_API_KEY`.
 4. **Internet on**: right sidebar → *Internet* → **On**. Needed to pull models and datasets.
 5. **Upload this repo** to the Kaggle environment. Two options:
