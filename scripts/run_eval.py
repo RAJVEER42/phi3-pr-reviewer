@@ -58,25 +58,31 @@ def get_secret(name: str) -> str | None:
         return None
 
 
-def load_base_model():
-    import torch
-    from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+def load_base_model(use_4bit: bool = False):
+    """Load Phi-3-mini.
 
-    # T4 has no native bf16 → fall back to fp16 or it silently runs emulated bf16 ~5x slower.
+    For eval we default to fp16 (no quantization) — Phi-3-mini is 3.8B params
+    ≈ 7.6 GB in fp16, fits easily in a T4. 4-bit dequantization overhead on T4
+    is severe (~5x slower than fp16 because sm_75 lacks modern dequant paths).
+    The LoRA adapter from Phase 4 still loads fine on top of an fp16 base via
+    PeftModel.from_pretrained.
+    """
+    import torch
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    # T4 has no native bf16; auto-pick the best supported dtype.
     compute_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
-    bnb = BitsAndBytesConfig(
-        load_in_4bit=True,
-        bnb_4bit_quant_type="nf4",
-        bnb_4bit_compute_dtype=compute_dtype,
-        bnb_4bit_use_double_quant=True,
-    )
     tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL)
-    model = AutoModelForCausalLM.from_pretrained(
-        BASE_MODEL,
-        quantization_config=bnb,
-        device_map="auto",
-        torch_dtype=compute_dtype,
-    )
+    kwargs = {"device_map": "auto", "torch_dtype": compute_dtype}
+    if use_4bit:
+        from transformers import BitsAndBytesConfig
+        kwargs["quantization_config"] = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=compute_dtype,
+            bnb_4bit_use_double_quant=True,
+        )
+    model = AutoModelForCausalLM.from_pretrained(BASE_MODEL, **kwargs)
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token_id = tokenizer.eos_token_id
     return model, tokenizer
@@ -131,8 +137,9 @@ def run(args) -> int:
         },
     )
 
-    print(f"Loading base model {BASE_MODEL} (4-bit)...")
-    model, tokenizer = load_base_model()
+    precision_tag = "4-bit" if args.use_4bit else "fp16/bf16"
+    print(f"Loading base model {BASE_MODEL} ({precision_tag})...")
+    model, tokenizer = load_base_model(use_4bit=args.use_4bit)
 
     if args.adapter:
         print(f"Attaching adapter {args.adapter}...")
@@ -239,6 +246,11 @@ def main() -> int:
     parser.add_argument("--tag", required=True, help="run name, used for output filenames")
     parser.add_argument("--wandb-project", default="phi3-pr-reviewer")
     parser.add_argument("--out-dir", default="/kaggle/working")
+    parser.add_argument(
+        "--use-4bit",
+        action="store_true",
+        help="load base in 4-bit (slower on T4; only use if VRAM-constrained)",
+    )
     args = parser.parse_args()
     return run(args)
 
