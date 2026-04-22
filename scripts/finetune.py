@@ -23,6 +23,9 @@ Usage (inside a Kaggle P100 notebook with this repo uploaded):
 
 from __future__ import annotations
 
+# Unsloth must import before trl/transformers/peft to apply its kernel patches.
+import unsloth  # noqa: F401  (import side-effect)
+
 import argparse
 import os
 import sys
@@ -148,8 +151,9 @@ def main() -> int:
         save_total_limit=2,
         seed=args.seed,
         report_to="wandb",
-        max_seq_length=MAX_SEQ_LENGTH,
         packing=False,  # chat data with variable lengths — don't pack
+        # max_seq_length is read from tokenizer.model_max_length, already set
+        # to MAX_SEQ_LENGTH by FastLanguageModel.from_pretrained above.
     )
 
     trainer = SFTTrainer(
