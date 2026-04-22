@@ -23,9 +23,6 @@ Usage (inside a Kaggle P100 notebook with this repo uploaded):
 
 from __future__ import annotations
 
-# Unsloth must import before trl/transformers/peft to apply its kernel patches.
-import unsloth  # noqa: F401  (import side-effect)
-
 import argparse
 import os
 import sys
@@ -73,6 +70,23 @@ def main() -> int:
     parser.add_argument("--warmup-ratio", type=float, default=0.03)
     parser.add_argument("--weight-decay", type=float, default=0.01)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="resume training from the latest checkpoint in --output-dir",
+    )
+    parser.add_argument(
+        "--eval-steps",
+        type=int,
+        default=50,
+        help="run eval every N steps (higher = less frequent eval, faster run)",
+    )
+    parser.add_argument(
+        "--save-steps",
+        type=int,
+        default=100,
+        help="save checkpoint every N steps",
+    )
     args = parser.parse_args()
 
     # Secrets (kaggle or env)
@@ -160,9 +174,9 @@ def main() -> int:
         bf16=torch.cuda.is_bf16_supported(),
         logging_steps=10,
         eval_strategy="steps",
-        eval_steps=50,
+        eval_steps=args.eval_steps,
         save_strategy="steps",
-        save_steps=100,
+        save_steps=args.save_steps,
         save_total_limit=2,
         seed=args.seed,
         report_to="wandb",
@@ -180,8 +194,12 @@ def main() -> int:
         eval_dataset=eval_split,
     )
 
-    print("Training...")
-    trainer.train()
+    if args.resume:
+        print(f"Resuming from latest checkpoint in {args.output_dir}...")
+        trainer.train(resume_from_checkpoint=True)
+    else:
+        print("Training from scratch...")
+        trainer.train()
 
     print(f"Saving final adapter to {args.output_dir}")
     trainer.model.save_pretrained(args.output_dir)
