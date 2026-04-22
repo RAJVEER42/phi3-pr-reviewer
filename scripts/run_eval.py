@@ -96,23 +96,57 @@ def attach_adapter(model, adapter_ref: str):
     return model
 
 
-def generate(model, tokenizer, user_content: str) -> str:
-    import torch
+def generate_batched(
+    model,
+    tokenizer,
+    user_contents: list[str],
+    batch_size: int = 4,
+) -> list[str]:
+    """Batched greedy decoding. Left-padding is required for causal-LM batched generate.
 
-    messages = [{"role": "user", "content": user_content}]
-    prompt = tokenizer.apply_chat_template(
-        messages, tokenize=False, add_generation_prompt=True
-    )
-    inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
-    with torch.inference_mode():
-        out = model.generate(
-            **inputs,
-            max_new_tokens=MAX_NEW_TOKENS,
-            do_sample=False,  # greedy → reproducible
-            pad_token_id=tokenizer.pad_token_id,
-        )
-    gen_ids = out[0][inputs.input_ids.shape[1] :]
-    return tokenizer.decode(gen_ids, skip_special_tokens=True).strip()
+    Yields the generated text for each input, in input order. Keeps greedy
+    (do_sample=False) so each example's output is identical to the single-example
+    path — batching changes wall time, not results.
+    """
+    import torch
+    from tqdm import tqdm
+
+    prev_padding_side = tokenizer.padding_side
+    tokenizer.padding_side = "left"
+    try:
+        results: list[str] = []
+        for i in tqdm(range(0, len(user_contents), batch_size), desc="generating"):
+            chunk = user_contents[i : i + batch_size]
+            prompts = [
+                tokenizer.apply_chat_template(
+                    [{"role": "user", "content": c}],
+                    tokenize=False,
+                    add_generation_prompt=True,
+                )
+                for c in chunk
+            ]
+            inputs = tokenizer(
+                prompts,
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+                max_length=1792,  # leaves ~256 tokens headroom for generation
+            ).to(model.device)
+            with torch.inference_mode():
+                out = model.generate(
+                    **inputs,
+                    max_new_tokens=MAX_NEW_TOKENS,
+                    do_sample=False,
+                    pad_token_id=tokenizer.pad_token_id,
+                    eos_token_id=tokenizer.eos_token_id,
+                )
+            prompt_len = inputs.input_ids.shape[1]
+            for seq in out:
+                text = tokenizer.decode(seq[prompt_len:], skip_special_tokens=True).strip()
+                results.append(text)
+        return results
+    finally:
+        tokenizer.padding_side = prev_padding_side
 
 
 def run(args) -> int:
@@ -150,15 +184,13 @@ def run(args) -> int:
     ds = load_dataset(args.dataset, split=args.split, token=hf_token)
     print(f"  {len(ds)} rows")
 
-    predictions: list[str] = []
+    user_contents: list[str] = []
     references: list[str] = []
     metadata: list[dict] = []
-
-    for row in tqdm(ds, desc="generating"):
+    for row in ds:
         user_msg = next(m for m in row["messages"] if m["role"] == "user")
         ref = next(m for m in row["messages"] if m["role"] == "assistant")
-        pred = generate(model, tokenizer, user_msg["content"])
-        predictions.append(pred)
+        user_contents.append(user_msg["content"])
         references.append(ref["content"])
         metadata.append(
             {
@@ -167,6 +199,10 @@ def run(args) -> int:
                 "file_path": row.get("file_path"),
             }
         )
+
+    predictions = generate_batched(
+        model, tokenizer, user_contents, batch_size=args.batch_size
+    )
 
     print("\nComputing BERTScore (this loads ~1.5 GB scorer on first run)...")
     from bert_score import score as bert_score
@@ -250,6 +286,12 @@ def main() -> int:
         "--use-4bit",
         action="store_true",
         help="load base in 4-bit (slower on T4; only use if VRAM-constrained)",
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=4,
+        help="generation batch size (T4 handles 4 safely; T4x2/A100 can go higher)",
     )
     args = parser.parse_args()
     return run(args)
