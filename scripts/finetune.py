@@ -182,6 +182,7 @@ def main() -> int:
         report_to="wandb",
         packing=False,  # chat data with variable lengths — don't pack
         dataset_text_field="text",
+        dataset_num_proc=1,  # avoid pickling Unsloth-patched objects across workers
         # max_seq_length is read from tokenizer.model_max_length, already set
         # to MAX_SEQ_LENGTH by FastLanguageModel.from_pretrained above.
     )
