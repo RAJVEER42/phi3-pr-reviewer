@@ -188,7 +188,7 @@ def main() -> int:
 
     trainer = SFTTrainer(
         model=model,
-        tokenizer=tokenizer,
+        processing_class=tokenizer,  # TRL 0.13+ renamed `tokenizer` → `processing_class`
         args=cfg,
         train_dataset=train_split,
         eval_dataset=eval_split,
