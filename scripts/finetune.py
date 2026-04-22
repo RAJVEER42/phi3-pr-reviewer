@@ -124,11 +124,26 @@ def main() -> int:
     if eval_split is None:
         raise KeyError("Dataset has no 'validation' (or 'val') split")
 
-    # Strip metadata cols — SFTTrainer only needs the "messages" column.
-    drop = [c for c in train_split.column_names if c != "messages"]
-    train_split = train_split.remove_columns(drop)
-    eval_split = eval_split.remove_columns(drop)
+    # Pre-apply the Phi-3 chat template so the trainer only sees a flat "text" column.
+    # This sidesteps TRL/Unsloth churn around messages-format handling and ensures
+    # the *exact* tokenization used at training matches what we'll feed at inference.
+    def format_row(example):
+        return {
+            "text": tokenizer.apply_chat_template(
+                example["messages"],
+                tokenize=False,
+                add_generation_prompt=False,
+            )
+        }
+
+    train_split = train_split.map(
+        format_row, remove_columns=train_split.column_names
+    )
+    eval_split = eval_split.map(
+        format_row, remove_columns=eval_split.column_names
+    )
     print(f"  train={len(train_split)} rows, eval={len(eval_split)} rows")
+    print(f"  sample text (first 200 chars): {train_split[0]['text'][:200]!r}")
 
     cfg = SFTConfig(
         output_dir=args.output_dir,
@@ -152,6 +167,7 @@ def main() -> int:
         seed=args.seed,
         report_to="wandb",
         packing=False,  # chat data with variable lengths — don't pack
+        dataset_text_field="text",
         # max_seq_length is read from tokenizer.model_max_length, already set
         # to MAX_SEQ_LENGTH by FastLanguageModel.from_pretrained above.
     )
