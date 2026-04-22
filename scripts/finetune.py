@@ -159,6 +159,24 @@ def main() -> int:
     print(f"  train={len(train_split)} rows, eval={len(eval_split)} rows")
     print(f"  sample text (first 200 chars): {train_split[0]['text'][:200]!r}")
 
+    # Pre-tokenize here (in main process, no multiprocess) so SFTTrainer's
+    # internal _prepare_dataset sees an already-tokenized dataset and skips
+    # its own .map() call. That map() hits a pickle error on Unsloth-patched
+    # torch config objects when multiprocess gets involved.
+    def tokenize_fn(example):
+        return tokenizer(
+            example["text"],
+            truncation=True,
+            max_length=MAX_SEQ_LENGTH,
+            padding=False,
+        )
+
+    print("Pre-tokenizing train split (main process, single thread)...")
+    train_split = train_split.map(tokenize_fn, remove_columns=["text"])
+    print("Pre-tokenizing eval split...")
+    eval_split = eval_split.map(tokenize_fn, remove_columns=["text"])
+    print(f"  columns after tokenization: {train_split.column_names}")
+
     cfg = SFTConfig(
         output_dir=args.output_dir,
         per_device_train_batch_size=args.batch_size,
