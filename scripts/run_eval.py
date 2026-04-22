@@ -88,10 +88,10 @@ def load_base_model(use_4bit: bool = False):
     return model, tokenizer
 
 
-def attach_adapter(model, adapter_ref: str):
+def attach_adapter(model, adapter_ref: str, hf_token: str | None = None):
     from peft import PeftModel
 
-    model = PeftModel.from_pretrained(model, adapter_ref)
+    model = PeftModel.from_pretrained(model, adapter_ref, token=hf_token)
     model.eval()
     return model
 
@@ -177,7 +177,7 @@ def run(args) -> int:
 
     if args.adapter:
         print(f"Attaching adapter {args.adapter}...")
-        model = attach_adapter(model, args.adapter)
+        model = attach_adapter(model, args.adapter, hf_token=hf_token)
     model.eval()
 
     print(f"Loading dataset {args.dataset} / {args.split}...")
