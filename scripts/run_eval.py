@@ -204,8 +204,31 @@ def run(args) -> int:
         model, tokenizer, user_contents, batch_size=args.batch_size
     )
 
-    print("\nComputing BERTScore (this loads ~1.5 GB scorer on first run)...")
-    from bert_score import score as bert_score
+    out_dir = Path(args.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    preds_path = out_dir / f"{args.tag}_predictions.jsonl"
+    summary_path = out_dir / f"{args.tag}_summary.json"
+
+    # Save predictions IMMEDIATELY (without scores) so a BERTScore failure
+    # doesn't lose hours of generation work. Scores are added below in a
+    # second pass that overwrites this file.
+    with preds_path.open("w") as f:
+        for i, (p, r, m) in enumerate(zip(predictions, references, metadata)):
+            f.write(json.dumps({"idx": i, "prediction": p, "reference": r, **m}) + "\n")
+    print(f"\n  Predictions saved (pre-scoring): {preds_path}")
+
+    print("Computing BERTScore (this loads ~1.5 GB scorer on first run)...")
+    try:
+        from bert_score import score as bert_score
+    except ImportError:
+        print(
+            "\nERROR: bert-score not installed. Install with `pip install bert-score`,\n"
+            "then run `scripts/score_predictions.py --predictions "
+            f"{preds_path} --tag {args.tag}` to compute scores from saved predictions\n"
+            "(no need to re-generate)."
+        )
+        wandb.finish()
+        return 1
 
     P, R, F = bert_score(
         predictions,
@@ -228,11 +251,7 @@ def run(args) -> int:
         }
     )
 
-    out_dir = Path(args.out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    preds_path = out_dir / f"{args.tag}_predictions.jsonl"
-    summary_path = out_dir / f"{args.tag}_summary.json"
-
+    # Overwrite predictions file with per-row scores attached.
     with preds_path.open("w") as f:
         for i, (p, r, m) in enumerate(zip(predictions, references, metadata)):
             f.write(
