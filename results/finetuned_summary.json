@@ -1,0 +1,8 @@
+{
+  "tag": "finetuned",
+  "scorer": "microsoft/deberta-xlarge-mnli",
+  "n_examples": 584,
+  "bertscore_f1": 0.4666834771633148,
+  "bertscore_precision": 0.48074665665626526,
+  "bertscore_recall": 0.4730158746242523
+}

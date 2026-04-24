@@ -19,17 +19,20 @@ Locked-in metrics from each phase, for comparison and README.
 
 ## Phase 4 — Fine-tuned (QLoRA adapter on Phi-3-mini)
 
-| Metric | Value | Δ vs. baseline |
-|---|---|---|
-| **BERTScore F1** | **0.4667** | **+0.0351 (+8.13% relative)** |
-| n_examples | 584 (test split) |  |
-| adapter | `Itachi-42/phi3-pr-reviewer-lora` |  |
-| training | 2,000 / 2,512 planned steps (~80% of 2 epochs) |  |
-| eval loss trajectory | 2.464 → 2.362 (steady decrease) |  |
-| hardware | Kaggle T4 × 2 (Unsloth) |  |
-| date | 2026-04-23 |  |
+| Metric | Baseline | Fine-tuned | Δ (absolute) | Δ (relative) |
+|---|---|---|---|---|
+| **BERTScore F1** | 0.4316 | **0.4667** | +0.0351 | **+8.13%** |
+| BERTScore Precision | 0.3781 | **0.4807** | +0.1026 | **+27.1%** |
+| BERTScore Recall | 0.5102 | 0.4730 | −0.0372 | −7.3% |
 
-**Observation:** +8.13% relative BERTScore F1 is a clear, consistent improvement — not statistical noise — and is directionally what we'd expect if the model learned to be terser. Training was cut short at ~80% of plan due to a Kaggle eval-hang; the adapter was recovered from checkpoint-2000.
+Metadata: n=584 test examples; adapter = `Itachi-42/phi3-pr-reviewer-lora`; training = 2,000 / 2,512 planned steps (~80% of 2 epochs); eval loss 2.464 → 2.362; hardware Kaggle T4×2 via Unsloth; date 2026-04-23.
+
+**Observation:** the fine-tune did exactly what the verbosity failure mode of the baseline predicted. Precision jumped +27% because the model learned to stop rambling; recall dropped modestly because terser outputs inevitably miss some reference content. Net F1 lift was +8.13% relative — meaningful but short of the pre-committed 10% threshold. Training was cut short at ~80% of plan due to a Kaggle eval-hang; the adapter was recovered from checkpoint-2000.
+
+**Prediction-level analysis** (see [results/README.md](results/README.md) for details):
+- F1 **median = 0.479**, mean = 0.467 (std 0.088). Median > mean indicates a left-skewed tail dragging down the average.
+- Output-length **median = 19.5 words vs. reference median = 18** — fine-tune matched reference terseness on the median.
+- But output-length **mean = 38.2 vs. reference mean = 22.8** — ~10% of outputs fall into a *"continue the diff"* failure mode (model regenerates code instead of producing a review comment), which tanks F1 on those rows from ~0.5 to ~0.25 and pulls the mean down.
 
 ## Phase 5 — Held-out generalization (`psf/black`)
 

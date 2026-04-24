@@ -10,3 +10,4 @@ wandb/
 logs/
 *.jsonl
 !results/*.jsonl
+RajveerB_TwoProjects.pdf
