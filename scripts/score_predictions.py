@@ -56,16 +56,35 @@ def main() -> int:
     print(f"Loaded {len(rows)} (prediction, reference) pairs")
 
     print(f"Computing BERTScore with {args.scorer_model}...")
+
+    # Workaround for bert-score + newer transformers: some tokenizers (e.g.,
+    # microsoft/deberta-xlarge-mnli) ship with model_max_length=VERY_LARGE_INT
+    # which overflows Rust's i64 when passed to enable_truncation. Monkey-patch
+    # AutoTokenizer.from_pretrained to cap model_max_length at 512 for the
+    # duration of the bert_score call.
+    from transformers import AutoTokenizer
     from bert_score import score as bert_score
 
-    P, R, F = bert_score(
-        predictions,
-        references,
-        model_type=args.scorer_model,
-        lang="en",
-        batch_size=args.batch_size,
-        verbose=True,
-    )
+    _orig_from_pretrained = AutoTokenizer.from_pretrained
+
+    def _patched_from_pretrained(*a, **kw):
+        tok = _orig_from_pretrained(*a, **kw)
+        if getattr(tok, "model_max_length", 0) > 10_000_000:
+            tok.model_max_length = 512
+        return tok
+
+    AutoTokenizer.from_pretrained = _patched_from_pretrained
+    try:
+        P, R, F = bert_score(
+            predictions,
+            references,
+            model_type=args.scorer_model,
+            lang="en",
+            batch_size=args.batch_size,
+            verbose=True,
+        )
+    finally:
+        AutoTokenizer.from_pretrained = _orig_from_pretrained
     mean_f = F.mean().item()
     mean_p = P.mean().item()
     mean_r = R.mean().item()

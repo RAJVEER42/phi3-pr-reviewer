@@ -230,14 +230,30 @@ def run(args) -> int:
         wandb.finish()
         return 1
 
-    P, R, F = bert_score(
-        predictions,
-        references,
-        model_type=SCORER_MODEL,
-        lang="en",
-        batch_size=8,
-        verbose=False,
-    )
+    # Workaround for bert-score + newer transformers: deberta-xlarge-mnli's
+    # tokenizer ships with model_max_length=VERY_LARGE_INT which overflows
+    # Rust's i64 in enable_truncation. Cap it at 512 for the scoring call.
+    from transformers import AutoTokenizer as _AutoTokenizer
+    _orig_from_pretrained = _AutoTokenizer.from_pretrained
+
+    def _patched_from_pretrained(*a, **kw):
+        tok = _orig_from_pretrained(*a, **kw)
+        if getattr(tok, "model_max_length", 0) > 10_000_000:
+            tok.model_max_length = 512
+        return tok
+
+    _AutoTokenizer.from_pretrained = _patched_from_pretrained
+    try:
+        P, R, F = bert_score(
+            predictions,
+            references,
+            model_type=SCORER_MODEL,
+            lang="en",
+            batch_size=8,
+            verbose=False,
+        )
+    finally:
+        _AutoTokenizer.from_pretrained = _orig_from_pretrained
     mean_f = F.mean().item()
     mean_p = P.mean().item()
     mean_r = R.mean().item()
