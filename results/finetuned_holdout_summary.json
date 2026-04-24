@@ -1,0 +1,11 @@
+{
+  "tag": "finetuned_holdout",
+  "base_model": "microsoft/Phi-3-mini-4k-instruct",
+  "adapter": "Itachi-42/phi3-pr-reviewer-lora",
+  "dataset": "Itachi-42/pr-reviews-holdout",
+  "split": "test",
+  "n_examples": 81,
+  "bertscore_f1": 0.4645686745643616,
+  "bertscore_precision": 0.47306564450263977,
+  "bertscore_recall": 0.4773704707622528
+}
