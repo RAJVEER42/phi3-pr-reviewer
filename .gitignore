@@ -9,3 +9,4 @@ data/processed/
 wandb/
 logs/
 *.jsonl
+!results/*.jsonl
